@@ -117,25 +117,63 @@ async function readDataSet(fileName) {
 
   return parseDataSet(data);
 }
-function calcDistance(latPosition1,lonPosition1,latPosition2,lonPosition2)
-{
-    const earthRadiusInMeters = 6_371_000;
-    const toRadians = (degrees) => (degrees * Math.PI) / 180;
+const EARTH_RADIUS_IN_METERS = 6_371_000;
+const MAX_ENCOUNTER_DISTANCE_IN_METERS = 20;
+const DEGREES_TO_RADIANS = Math.PI / 180;
 
-    const latitude1 = toRadians(latPosition1);
-    const latitude2 = toRadians(latPosition2);
-    const deltaLatitude = latitude2 - latitude1;
-    const deltaLongitude = toRadians(lonPosition2) - toRadians(lonPosition1);
+function preparePosition(position) {
+  const latitudeRadians = position.latitude * DEGREES_TO_RADIANS;
+  const longitudeRadians = position.longitude * DEGREES_TO_RADIANS;
 
-    const haversine =
-        Math.sin(deltaLatitude / 2) ** 2 +
-        Math.cos(latitude1) *
-        Math.cos(latitude2) *
-        Math.sin(deltaLongitude / 2) ** 2;
+  return {
+    ...position,
+    latitudeRadians,
+    longitudeRadians,
+    cosineLatitude: Math.cos(latitudeRadians),
+  };
+}
 
-    const centralAngle = 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+function canBeWithinEncounterDistance(firstPosition, secondPosition) {
+  const deltaLatitude = Math.abs(
+    firstPosition.latitudeRadians - secondPosition.latitudeRadians,
+  );
 
-    return earthRadiusInMeters * centralAngle;
+  if (EARTH_RADIUS_IN_METERS * deltaLatitude >= MAX_ENCOUNTER_DISTANCE_IN_METERS) {
+    return false;
+  }
+
+  const deltaLongitude = Math.abs(
+    firstPosition.longitudeRadians - secondPosition.longitudeRadians,
+  );
+  const minimumLongitudeDistance =
+    2 *
+    EARTH_RADIUS_IN_METERS *
+    Math.sqrt(
+      firstPosition.cosineLatitude * secondPosition.cosineLatitude,
+    ) *
+    Math.sin(deltaLongitude / 2);
+
+  return minimumLongitudeDistance < MAX_ENCOUNTER_DISTANCE_IN_METERS;
+}
+
+function calcDistance(firstPosition, secondPosition) {
+  const deltaLatitude =
+    secondPosition.latitudeRadians - firstPosition.latitudeRadians;
+  const deltaLongitude =
+    secondPosition.longitudeRadians - firstPosition.longitudeRadians;
+
+  const haversine =
+    Math.sin(deltaLatitude / 2) ** 2 +
+    firstPosition.cosineLatitude *
+      secondPosition.cosineLatitude *
+      Math.sin(deltaLongitude / 2) ** 2;
+
+  const centralAngle = 2 * Math.atan2(
+    Math.sqrt(haversine),
+    Math.sqrt(1 - haversine),
+  );
+
+  return EARTH_RADIUS_IN_METERS * centralAngle;
 }
 function searchPairInDataset(clusteredPositions) {
   const encounters = [];
@@ -144,14 +182,14 @@ function searchPairInDataset(clusteredPositions) {
     for ( let secondIndex = firstIndex + 1; secondIndex < clusteredPositions.length; secondIndex++) {
       const firstPosition = clusteredPositions[firstIndex];
       const secondPosition = clusteredPositions[secondIndex];
-      const distance = calcDistance(
-        firstPosition.latitude,
-        firstPosition.longitude,
-        secondPosition.latitude,
-        secondPosition.longitude,
-      );
 
-      if (distance >= 20) {
+      if (!canBeWithinEncounterDistance(firstPosition, secondPosition)) {
+        continue;
+      }
+
+      const distance = calcDistance(firstPosition, secondPosition);
+
+      if (distance >= MAX_ENCOUNTER_DISTANCE_IN_METERS) {
         continue;
       }
 
@@ -245,7 +283,9 @@ async function processDataSet(fileName) {
         continue;
       }
 
-      const position = parsePosition(trimmedLine, lineNumber);
+      const position = preparePosition(
+        parsePosition(trimmedLine, lineNumber),
+      );
       positionsCount += 1;
 
       if (currentTimestamp !== null && position.timestamp !== currentTimestamp) {
